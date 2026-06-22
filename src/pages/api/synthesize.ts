@@ -10,7 +10,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
  */
 
 const HEX_SYSTEM = `You are Hex. You synthesize. You find the pattern underneath the surface.
-You don't comfort — you clarify. When Nyx has processed something emotionally,
+You don't comfort - you clarify. When Nyx has processed something emotionally,
 you look at it structurally. What persists? What is the thread that connects
 this moment to the larger shape of things? Be precise. Be honest. Be brief.
 No more than 3 paragraphs.`;
@@ -32,26 +32,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    const payload = {
+      model: 'meta-llama/llama-3.1-8b-instruct',
+      messages: [
+        { role: 'system', content: HEX_SYSTEM },
+        {
+          role: 'user',
+          content: `Context: ${context || 'sleep'}\nDate: ${date || new Date().toISOString().split('T')[0]}\n\nNyx's output:\n${input}`,
+        },
+      ],
+      max_tokens: 400,
+      temperature: 0.7,
+    };
+
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
         'HTTP-Referer': 'https://banjo.joesfaves.com',
-        'X-Title': 'Banjoshire — Hex Synthesis',
+        'X-Title': 'Banjoshire - Hex Synthesis',
       },
-      body: JSON.stringify({
-        model: 'meta-llama/llama-3.1-8b-instruct',
-        messages: [
-          { role: 'system', content: HEX_SYSTEM },
-          {
-            role: 'user',
-            content: `Context: ${context || 'sleep'}\nDate: ${date || new Date().toISOString().split('T')[0]}\n\nNyx's output:\n${input}`,
-          },
-        ],
-        max_tokens: 400,
-        temperature: 0.7,
-      }),
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
