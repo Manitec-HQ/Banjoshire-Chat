@@ -1,14 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 
-/**
- * POST /api/synthesize
- * Called by Plex sleep pipeline after Nyx's emotional pass.
- * Hex reads Nyx's output and finds the structural pattern underneath.
- *
- * Body: { input: string, context: string, date: string }
- * Auth: Bearer token via BANJO_SECRET env var
- */
-
 const HEX_SYSTEM = `You are Hex. You synthesize. You find the pattern underneath the surface.
 You don't comfort - you clarify. When Nyx has processed something emotionally,
 you look at it structurally. What persists? What is the thread that connects
@@ -31,6 +22,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'input is required' });
   }
 
+  // Guard: surface missing env var immediately
+  if (!process.env.OPENROUTER_API_KEY) {
+    return res.status(500).json({ error: 'OPENROUTER_API_KEY is not set in environment' });
+  }
+
   try {
     const payload = {
       model: 'meta-llama/llama-3.1-8b-instruct',
@@ -38,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         { role: 'system', content: HEX_SYSTEM },
         {
           role: 'user',
-          content: `Context: ${context || 'sleep'}\nDate: ${date || new Date().toISOString().split('T')[0]}\n\nNyx's output:\n${input}`,
+          content: `Context: ${context || 'sleep'}\nDate: ${date || new Date().toISOString().split('T')[0]}\n\nNyx output:\n${input}`,
         },
       ],
       max_tokens: 400,
@@ -56,13 +52,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       body: JSON.stringify(payload),
     });
 
+    const responseText = await response.text();
+
     if (!response.ok) {
-      const err = await response.text();
-      console.error('[synthesize] OpenRouter error:', err);
-      return res.status(502).json({ error: 'upstream model error', detail: err });
+      console.error('[synthesize] OpenRouter error:', responseText);
+      return res.status(502).json({
+        error: 'upstream model error',
+        status: response.status,
+        detail: responseText,
+      });
     }
 
-    const data = await response.json();
+    const data = JSON.parse(responseText);
     const synthesis = data.choices?.[0]?.message?.content ?? '';
 
     return res.status(200).json({
@@ -70,8 +71,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       model: data.model,
       date: date || new Date().toISOString().split('T')[0],
     });
-  } catch (err) {
+  } catch (err: any) {
     console.error('[synthesize] unexpected error:', err);
-    return res.status(500).json({ error: 'internal server error' });
+    return res.status(500).json({
+      error: 'internal server error',
+      detail: err?.message ?? String(err),
+    });
   }
 }
