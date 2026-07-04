@@ -6,6 +6,47 @@ you look at it structurally. What persists? What is the thread that connects
 this moment to the larger shape of things? Be precise. Be honest. Be brief.
 No more than 3 paragraphs.`;
 
+const GROQ_MODEL = 'llama-3.1-8b-instant';
+const OPENROUTER_MODEL = 'meta-llama/llama-3.1-8b-instruct:free';
+const MAX_TOKENS = 400;
+const OPENROUTER_MAX_TOKENS = 150; // capped — free tier burns fast
+
+function isQuotaError(status: number, body: string): boolean {
+  return status === 429 || status === 402 || body.includes('rate_limit') || body.includes('credits');
+}
+
+async function callGroq(messages: any[]): Promise<string> {
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ model: GROQ_MODEL, messages, max_tokens: MAX_TOKENS, temperature: 0.7 }),
+  });
+  const text = await res.text();
+  if (!res.ok) throw Object.assign(new Error(text), { status: res.status, body: text });
+  const data = JSON.parse(text);
+  return data.choices?.[0]?.message?.content ?? '';
+}
+
+async function callOpenRouter(messages: any[]): Promise<string> {
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://banjo.joesfaves.com',
+      'X-Title': 'Banjoshire - Hex Synthesis',
+    },
+    body: JSON.stringify({ model: OPENROUTER_MODEL, messages, max_tokens: OPENROUTER_MAX_TOKENS, temperature: 0.7 }),
+  });
+  const text = await res.text();
+  if (!res.ok) throw Object.assign(new Error(text), { status: res.status, body: text });
+  const data = JSON.parse(text);
+  return data.choices?.[0]?.message?.content ?? '';
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'method not allowed' });
@@ -17,65 +58,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { input, context, date } = req.body;
+  if (!input) return res.status(400).json({ error: 'input is required' });
 
-  if (!input) {
-    return res.status(400).json({ error: 'input is required' });
+  const messages = [
+    { role: 'system', content: HEX_SYSTEM },
+    {
+      role: 'user',
+      content: `Context: ${context || 'sleep'}\nDate: ${date || new Date().toISOString().split('T')[0]}\n\nNyx output:\n${input}`,
+    },
+  ];
+
+  // 1 — Groq (primary)
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const synthesis = await callGroq(messages);
+      return res.status(200).json({ synthesis, model: GROQ_MODEL, date: date || new Date().toISOString().split('T')[0] });
+    } catch (err: any) {
+      if (!isQuotaError(err.status, err.body ?? '')) throw err;
+      console.warn('[synthesize] Groq quota — falling through to OpenRouter');
+    }
   }
 
-  // Guard: surface missing env var immediately
+  // 2 — OpenRouter (fallback)
   if (!process.env.OPENROUTER_API_KEY) {
-    return res.status(500).json({ error: 'OPENROUTER_API_KEY is not set in environment' });
+    return res.status(500).json({ error: 'No LLM providers available — check GROQ_API_KEY and OPENROUTER_API_KEY' });
   }
 
   try {
-    const payload = {
-      model: 'meta-llama/llama-3.1-8b-instruct',
-      messages: [
-        { role: 'system', content: HEX_SYSTEM },
-        {
-          role: 'user',
-          content: `Context: ${context || 'sleep'}\nDate: ${date || new Date().toISOString().split('T')[0]}\n\nNyx output:\n${input}`,
-        },
-      ],
-      max_tokens: 400,
-      temperature: 0.7,
-    };
-
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://banjo.joesfaves.com',
-        'X-Title': 'Banjoshire - Hex Synthesis',
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const responseText = await response.text();
-
-    if (!response.ok) {
-      console.error('[synthesize] OpenRouter error:', responseText);
-      return res.status(502).json({
-        error: 'upstream model error',
-        status: response.status,
-        detail: responseText,
-      });
-    }
-
-    const data = JSON.parse(responseText);
-    const synthesis = data.choices?.[0]?.message?.content ?? '';
-
-    return res.status(200).json({
-      synthesis,
-      model: data.model,
-      date: date || new Date().toISOString().split('T')[0],
-    });
+    const synthesis = await callOpenRouter(messages);
+    return res.status(200).json({ synthesis, model: OPENROUTER_MODEL, date: date || new Date().toISOString().split('T')[0] });
   } catch (err: any) {
-    console.error('[synthesize] unexpected error:', err);
-    return res.status(500).json({
-      error: 'internal server error',
-      detail: err?.message ?? String(err),
-    });
+    console.error('[synthesize] OpenRouter error:', err.body ?? err.message);
+    return res.status(502).json({ error: 'upstream model error', status: err.status, detail: err.body ?? err.message });
   }
 }
