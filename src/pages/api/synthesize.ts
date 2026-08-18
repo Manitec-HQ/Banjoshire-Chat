@@ -6,13 +6,22 @@ you look at it structurally. What persists? What is the thread that connects
 this moment to the larger shape of things? Be precise. Be honest. Be brief.
 No more than 3 paragraphs.`;
 
-const GROQ_MODEL = 'llama-3.1-8b-instant';
-const OPENROUTER_MODEL = 'meta-llama/llama-3.1-8b-instruct:free';
+const GROQ_MODEL = 'openai/gpt-oss-20b';
+const OPENROUTER_MODEL = 'openai/gpt-oss-20b:free';
 const MAX_TOKENS = 400;
 const OPENROUTER_MAX_TOKENS = 150; // capped — free tier burns fast
 
-function isQuotaError(status: number, body: string): boolean {
-  return status === 429 || status === 402 || body.includes('rate_limit') || body.includes('credits');
+function isRecoverableProviderError(status: number, body: string): boolean {
+  return (
+    status === 429 ||
+    status === 402 ||
+    status === 404 ||
+    body.includes('rate_limit') ||
+    body.includes('credits') ||
+    body.includes('model_not_found') ||
+    body.includes('does not exist') ||
+    body.includes('do not have access')
+  );
 }
 
 async function callGroq(messages: any[]): Promise<string> {
@@ -74,8 +83,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const synthesis = await callGroq(messages);
       return res.status(200).json({ synthesis, model: GROQ_MODEL, date: date || new Date().toISOString().split('T')[0] });
     } catch (err: any) {
-      if (!isQuotaError(err.status, err.body ?? '')) throw err;
-      console.warn('[synthesize] Groq quota — falling through to OpenRouter');
+      if (!isRecoverableProviderError(err.status, err.body ?? '')) throw err;
+      console.warn('[synthesize] Groq unavailable — falling through to OpenRouter');
     }
   }
 
